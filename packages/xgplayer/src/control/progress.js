@@ -63,12 +63,20 @@ let progress = function () {
       return
     }
     if (time >= 0 && time <= player.duration) {
-      let dot = util.createDom('xg-progress-dot', '', {}, 'xgplayer-progress-dot')
+      const tips = text ? `<span class="xgplayer-progress-tip">${text}</span>` : ''
+      let dot = util.createDom('xg-progress-dot', tips, {}, 'xgplayer-progress-dot')
       dot.style.left = (time / player.duration) * 100 + '%'
       outer.appendChild(dot)
       player.dotArr[time] = dot
       dotEvent(dot, text)
     }
+  }
+  player.addProgressDots = function (arr) {
+    if (!Array.isArray(arr)) return;
+    arr.forEach(item => {
+      const { time, text, duration } = item;
+      player.addProgressDot(time, text, duration);
+    })
   }
   player.removeProgressDot = function (time) {
     if (time >= 0 && time <= player.duration && player.dotArr[time]) {
