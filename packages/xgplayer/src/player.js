@@ -1,12 +1,15 @@
 import Proxy from './proxy'
 import util from './utils/util'
-import Database from './utils/database'
 import sniffer from './utils/sniffer'
+import XgplayerTimeRange from './utils/xgplayerTimeRange'
 import Errors from './error'
-import Draggabilly from 'draggabilly'
+import allOff from 'event-emitter/all-off'
+import s_i18n from './skin/controls/i18n.js'
+import './skin/style/index.scss'
+
 import {
   version
-} from '../package.json'
+} from '../version.json'
 class Player extends Proxy {
   constructor (options) {
     super(options)
@@ -24,7 +27,6 @@ class Player extends Proxy {
     this.version = version
     this.userTimer = null
     this.waitTimer = null
-    this.database = new Database()
     this.history = []
     this.isProgressMoving = false
     this.root = util.findDom(document, `#${this.config.id}`)
@@ -32,21 +34,29 @@ class Player extends Proxy {
       unselectable: 'on',
       onselectstart: 'return false'
     }, 'xgplayer-controls')
+    if (this.config.isShowControl) {
+      this.controls.style.display = 'none'
+    }
     if (!this.root) {
       let el = this.config.el
       if (el && el.nodeType === 1) {
         this.root = el
       } else {
-        this.emit('error', new Errors('use', this.config.vid, {
-          line: 32,
-          handle: 'Constructor',
-          msg: 'container id can\'t be empty'
+        this.emit('error', new Errors({
+          type: 'use',
+          errd: {
+            line: 45,
+            handle: 'Constructor',
+            msg: 'container id can\'t be empty'
+          },
+          vid: this.config.vid
         }))
+        console.error('container id can\'t be empty')
         return false
       }
     }
     // this.rootBackup = util.copyDom(this.root)
-    util.addClass(this.root, `xgplayer xgplayer-${sniffer.device} xgplayer-nostart ${this.config.controls ? '' : 'no-controls'}`)
+    util.addClass(this.root, `xgplayer xgplayer-${sniffer.device} xgplayer-nostart ${this.config.controls ? '' : 'xgplayer-no-controls'}`)
     this.root.appendChild(this.controls)
     if (this.config.fluid) {
       this.root.style['max-width'] = '100%'
@@ -58,13 +68,30 @@ class Player extends Proxy {
       this.video.style['top'] = '0'
       this.video.style['left'] = '0'
     } else {
-      this.root.style.width = `${this.config.width}px`
-      this.root.style.height = `${this.config.height}px`
+      // this.root.style.width = `${this.config.width}px`
+      // this.root.style.height = `${this.config.height}px`
+      if (this.config.width) {
+        if (typeof this.config.width !== 'number') {
+          this.root.style.width = this.config.width
+        } else {
+          this.root.style.width = `${this.config.width}px`
+        }
+      }
+      if (this.config.height) {
+        if (typeof this.config.height !== 'number') {
+          this.root.style.height = this.config.height
+        } else {
+          this.root.style.height = `${this.config.height}px`
+        }
+      }
     }
-    if(this.config.execBeforePluginsCall) {
+    if (this.config.execBeforePluginsCall) {
       this.config.execBeforePluginsCall.forEach(item => {
         item.call(this, this)
       })
+    }
+    if(!this.config.closeI18n) {
+      Player.install(s_i18n.name, s_i18n.method)
     }
     if (this.config.controlStyle && util.typeOf(this.config.controlStyle) === 'String') {
       let self = this
@@ -89,6 +116,9 @@ class Player extends Proxy {
       })
     } else {
       this.pluginsCall()
+    }
+    if(this.config.controlPlugins) {
+      Player.controlsRun(this.config.controlPlugins, this)
     }
     this.ev.forEach((item) => {
       let evName = Object.keys(item)[0]
@@ -117,30 +147,66 @@ class Player extends Proxy {
     }
     player.once('play', this.playFunc)
 
+    this.getVideoSize = function () {
+      if (this.video.videoWidth && this.video.videoHeight) {
+        let containerSize = player.root.getBoundingClientRect()
+        if (player.config.fitVideoSize === 'auto') {
+          if (containerSize.width / containerSize.height > this.video.videoWidth / this.video.videoHeight) {
+            player.root.style.height = `${this.video.videoHeight / this.video.videoWidth * containerSize.width}px`
+          } else {
+            player.root.style.width = `${this.video.videoWidth / this.video.videoHeight * containerSize.height}px`
+          }
+        } else if (player.config.fitVideoSize === 'fixWidth') {
+          player.root.style.height = `${this.video.videoHeight / this.video.videoWidth * containerSize.width}px`
+        } else if (player.config.fitVideoSize === 'fixHeight') {
+          player.root.style.width = `${this.video.videoWidth / this.video.videoHeight * containerSize.height}px`
+        }
+      }
+    }
+    player.once('loadeddata', this.getVideoSize)
+
     setTimeout(() => {
       this.emit('ready')
+      this.isReady = true
     }, 0)
 
-    if (!this.config.keyShortcut || this.config.keyShortcut === 'on') {
-      ['video', 'controls'].forEach(item => {
-        player[item].addEventListener('keydown', function(e) {player.onKeydown(e, player)})
-      })
-    }
     if (this.config.videoInit) {
-      if(util.hasClass(this.root, 'xgplayer-nostart')) {
+      if (util.hasClass(this.root, 'xgplayer-nostart')) {
         this.start()
       }
     }
+    if (player.config.rotate) {
+      player.on('requestFullscreen', this.updateRotateDeg)
+      player.on('exitFullscreen', this.updateRotateDeg)
+    }
+
+    function onDestroy () {
+      player.root.removeEventListener('mousemove', player.mousemoveFunc)
+      player.off('destroy', onDestroy)
+    }
+    player.once('destroy', onDestroy)
+  }
+
+  attachVideo () {
+    if(!window.XgVideoProxy) {
+      this.root.insertBefore(this.video, this.root.firstChild)
+    }
+    setTimeout(() => {
+      this.emit('complete')
+      if(this.danmu && typeof this.danmu.resize === 'function') {
+        this.danmu.resize()
+      }
+    }, 1)
   }
 
   start (url = this.config.url) {
-    let root = this.root
     let player = this
     if (!url || url === '') {
       this.emit('urlNull')
     }
     this.logParams.playSrc = url
     this.canPlayFunc = function () {
+      player.off('canplay', player.canPlayFunc)
       let playPromise = player.video.play()
       if (playPromise !== undefined && playPromise) {
         playPromise.then(function () {
@@ -150,10 +216,13 @@ class Player extends Proxy {
           Player.util.addClass(player.root, 'xgplayer-is-autoplay')
         })
       }
-      player.off('canplay', player.canPlayFunc)
     }
-    if (util.typeOf(url) === 'String') {
-      this.video.src = url
+    if (util.typeOf(url) !== 'Array') {
+      if (util.typeOf(url) === 'String' && url.indexOf('blob:') > -1 && url === this.video.src) {
+        // 在Chromium环境下用mse url给video二次赋值会导致错误
+      } else {
+        this.video.src = url
+      }
     } else {
       url.forEach(item => {
         this.video.appendChild(util.createDom('source', '', {
@@ -173,29 +242,42 @@ class Player extends Proxy {
     }
     this.once('loadeddata', this.loadeddataFunc)
     if (this.config.autoplay) {
-      this.on('canplay', this.canPlayFunc)
+      if (sniffer.os.isPhone) {
+        this.canPlayFunc()
+      } else {
+        this.on('canplay', this.canPlayFunc)
+      }
     }
-    root.insertBefore(this.video, root.firstChild)
-    setTimeout(() => {
-      this.emit('complete')
-    }, 1)
+    if(!this.config.disableStartLoad) {
+      this.video.load()
+    }
+    this.attachVideo()
   }
 
   reload () {
     this.video.load()
     this.reloadFunc = function () {
-      this.play()
+      // eslint-disable-next-line handle-callback-err
+      let playPromise = this.play()
+      if (playPromise !== undefined && playPromise) {
+        playPromise.catch(err => {})
+      }
     }
     this.once('loadeddata', this.reloadFunc)
   }
 
   destroy (isDelDom = true) {
     let player = this
-    let parentNode = this.root.parentNode
     clearInterval(this.bulletResizeTimer)
     for (let k in this._interval) {
       clearInterval(this._interval[k])
       this._interval[k] = null
+    }
+    if (this.checkTimer) {
+      clearInterval(this.checkTimer)
+    }
+    if (this.waitTimer) {
+      clearTimeout(this.waitTimer)
     }
     this.ev.forEach((item) => {
       let evName = Object.keys(item)[0]
@@ -204,25 +286,28 @@ class Player extends Proxy {
         this.off(evName, evFunc)
       }
     });
-    if(this.loadeddataFunc) {
+    if (this.loadeddataFunc) {
       this.off('loadeddata', this.loadeddataFunc)
     }
-    if(this.reloadFunc) {
+    if (this.reloadFunc) {
       this.off('loadeddata', this.reloadFunc)
     }
-    if(this.replayFunc) {
+    if (this.replayFunc) {
       this.off('play', this.replayFunc)
     }
-    if(this.playFunc) {
+    if (this.playFunc) {
       this.off('play', this.playFunc)
     }
+    if (this.getVideoSize) {
+      this.off('loadeddata', this.getVideoSize)
+    };
     ['focus', 'blur'].forEach(item => {
       this.off(item, this['on' + item.charAt(0).toUpperCase() + item.slice(1)])
     })
     if (!this.config.keyShortcut || this.config.keyShortcut === 'on') {
       ['video', 'controls'].forEach(item => {
         if (this[item]) {
-          this[item].removeEventListener('keydown', function(e) {player.onKeydown(e, player)})
+          this[item].removeEventListener('keydown', function (e) { player.onKeydown(e, player) })
         }
       })
     }
@@ -236,14 +321,22 @@ class Player extends Proxy {
       this.video.removeAttribute('src') // empty source
       this.video.load()
       if (isDelDom) {
-        parentNode.removeChild(this.root)
+        // parentNode.removeChild(this.root)
+        this.root.innerHTML = ''
+        let classNameList = this.root.className.split(' ')
+        if (classNameList.length > 0) {
+          this.root.className = classNameList.filter(name => name.indexOf('xgplayer') < 0).join(' ')
+        } else {
+          this.root.className = ''
+        }
       }
+
       for (let k in this) {
         // if (k !== 'config') {
-          delete this[k]
+        delete this[k]
         // }
       }
-      this.off('pause', destroyFunc)
+      allOff(this)
     }
 
     if (!this.paused) {
@@ -260,6 +353,10 @@ class Player extends Proxy {
     let _replay = this._replay
     // ie9 bugfix
     util.removeClass(this.root, 'xgplayer-ended')
+    if(sniffer.browser.indexOf('ie') > -1) {
+      this.emit('play')
+      this.emit('playing')
+    }
     this.logParams = {
       bc: 0,
       bu_acu_t: 0,
@@ -283,20 +380,29 @@ class Player extends Proxy {
       _replay()
     } else {
       this.currentTime = 0
-      this.play()
+      // eslint-disable-next-line handle-callback-err
+      let playPromise = this.play()
+      if (playPromise !== undefined && playPromise) {
+        playPromise.catch(err => {})
+      }
     }
   }
 
   pluginsCall () {
+    if(Player.plugins['s_i18n']) {
+      Player.plugins['s_i18n'].call(this, this)
+    }
     let self = this
     if (Player.plugins) {
       let ignores = this.config.ignores
       Object.keys(Player.plugins).forEach(name => {
         let descriptor = Player.plugins[name]
-        if (!ignores.some(item => name === item)) {
+        if (!ignores.some(item => name === item || name === 's_' + item) && name !== 's_i18n') {
           if (['pc', 'tablet', 'mobile'].some(type => type === name)) {
             if (name === sniffer.device) {
               setTimeout(() => {
+                // if destroyed, skip
+                if (!self.video) return;
                 descriptor.call(self, self)
               }, 0)
             }
@@ -308,50 +414,11 @@ class Player extends Proxy {
     }
   }
 
-  getPIP () {
-    let ro = this.root.getBoundingClientRect()
-    let Top = ro.top
-    let Left = ro.left
-    let dragLay = util.createDom('xg-pip-lay', '<div></div>', {}, 'xgplayer-pip-lay')
-    this.root.appendChild(dragLay)
-    let dragHandle = util.createDom('xg-pip-drag', '<div class="drag-handle"><span>点击按住可拖动视频</span></div>', {tabindex: 9}, 'xgplayer-pip-drag')
-    this.root.appendChild(dragHandle)
-    let draggie = new Draggabilly('.xgplayer', {
-      handle: '.drag-handle'
-    })
-    util.addClass(this.root, 'xgplayer-pip-active')
-    this.root.style.right = 0
-    this.root.style.bottom = '200px'
-    this.root.style.top = ''
-    this.root.style.left = ''
-    if (this.config.fluid) {
-      this.root.style['padding-top'] = ''
-    }
-    let player = this;
-    ['click', 'touchstart'].forEach(item => {
-      dragLay.addEventListener(item, function (e) {
-        e.preventDefault()
-        e.stopPropagation()
-        player.exitPIP()
-        player.root.style.top = `${Top}px`
-        player.root.style.left = `${Left}px`
-      })
-    })
-  }
-
-  exitPIP () {
-    util.removeClass(this.root, 'xgplayer-pip-active')
-    this.root.style.right = ''
-    this.root.style.bottom = ''
-    this.root.style.top = ''
-    this.root.style.left = ''
-    if (this.config.fluid) {
-      this.root.style['padding-top'] = `${this.config.height * 100 / this.config.width}%`
-    }
-  }
-
   onFocus () {
     let player = this
+    if(util.hasClass(this.root, 'xgplayer-inactive')) {
+      player.emit('controlShow')
+    }
     util.removeClass(this.root, 'xgplayer-inactive')
     if (player.userTimer) {
       clearTimeout(player.userTimer)
@@ -363,12 +430,16 @@ class Player extends Proxy {
 
   onBlur () {
     // this.video.blur()
-    if (!this.paused && !this.ended) {
+    if ((this.config.enablePausedInactive || !this.paused) && !this.ended && !this.config.closeInactive) {
+      if(!util.hasClass(this.root, 'xgplayer-inactive')) {
+        this.emit('controlHide')
+      }
       util.addClass(this.root, 'xgplayer-inactive')
     }
   }
 
   onPlay () {
+    util.addClass(this.root, 'xgplayer-isloading')
     util.addClass(this.root, 'xgplayer-playing')
     util.removeClass(this.root, 'xgplayer-pause')
   }
@@ -387,11 +458,24 @@ class Player extends Proxy {
   }
 
   onSeeking () {
+    this.isSeeking = true
+    // 兼容IE下无法触发waiting事件的问题 seeking的时候直接出发waiting
+    this.onWaiting()
     // util.addClass(this.root, 'seeking');
   }
 
+  // onTimeupdate () {
+  //   // for ie,playing fired before waiting
+  //   if (this.waitTimer) {
+  //     clearTimeout(this.waitTimer)
+  //   }
+  //   util.removeClass(this.root, 'xgplayer-isloading')
+
+  // }
+
   onSeeked () {
     // for ie,playing fired before waiting
+    this.isSeeking = false
     if (this.waitTimer) {
       clearTimeout(this.waitTimer)
     }
@@ -403,12 +487,29 @@ class Player extends Proxy {
     if (self.waitTimer) {
       clearTimeout(self.waitTimer)
     }
+    if (self.checkTimer) {
+      clearInterval(self.checkTimer)
+      self.checkTimer = null
+    }
+    let time = self.currentTime
     self.waitTimer = setTimeout(function () {
       util.addClass(self.root, 'xgplayer-isloading')
+      self.checkTimer = setInterval(function () {
+        if (self.currentTime !== time) {
+          util.removeClass(this.root, 'xgplayer-isloading')
+          clearInterval(self.checkTimer)
+          self.checkTimer = null
+        }
+      }, 1000)
     }, 500)
   }
 
   onPlaying () {
+    // 兼容safari下无法自动播放会触发该事件的场景
+    if (this.paused) {
+      return
+    }
+    this.isSeeking = false
     if (this.waitTimer) {
       clearTimeout(this.waitTimer)
     }
@@ -416,71 +517,52 @@ class Player extends Proxy {
     util.addClass(this.root, 'xgplayer-playing')
   }
 
-  onKeydown (event, player) {
-    // let player = this
-    let e = event || window.event
-    if (e && (e.keyCode === 37 || e.keyCode === 38 || e.keyCode === 39 || e.keyCode === 40 || e.keyCode === 32)) {
-      player.emit('focus')
+  get cumulateTime () {
+    if (this.logParams && this.logParams.played instanceof Array) {
+      const accTime  = util.computeWatchDur(this.logParams.played) || 0
+      return Number(accTime.toFixed(3))
     }
-    if (e && (e.keyCode === 40 || e.keyCode === 38)) {
-      if (player.controls) {
-        let volumeSlider = player.controls.querySelector('.xgplayer-slider')
-        if (volumeSlider) {
-          if (util.hasClass(volumeSlider, 'xgplayer-none')) {
-            util.removeClass(volumeSlider, 'xgplayer-none')
-          }
-          if (player.sliderTimer) {
-            clearTimeout(player.sliderTimer)
-          }
-          player.sliderTimer = setTimeout(function () {
-            util.addClass(volumeSlider, 'xgplayer-none')
-          }, player.config.inactive)
-        }
-      }
-      if (e && e.keyCode === 40) { // 按 down
-        if (player.volume - 0.1 >= 0) {
-          player.volume -= 0.1
-        } else {
-          player.volume = 0
-        }
-      } else if (e && e.keyCode === 38) { // 按 up
-        if (player.volume + 0.1 <= 1) {
-          player.volume += 0.1
-        } else {
-          player.volume = 1
-        }
-      }
-    } else if (e && e.keyCode === 39) { // 按 right
-      if (player.currentTime + 10 <= player.duration) {
-        player.currentTime += 10
-      } else {
-        player.currentTime = player.duration - 1
-      }
-    } else if (e && e.keyCode === 37) { // 按 left
-      if (player.currentTime - 10 >= 0) {
-        player.currentTime -= 10
-      } else {
-        player.currentTime = 0
-      }
-    } else if (e && e.keyCode === 32) { // 按 spacebar
-      if (player.paused) {
-        player.play()
-      } else {
-        player.pause()
-      }
-    }
+    return 0
   }
 
   static install (name, descriptor) {
     if (!Player.plugins) {
       Player.plugins = {}
     }
+    if (!Player.plugins[name]) {
+      Player.plugins[name] = descriptor
+    }
+  }
+
+  static installAll (list) {
+    for (let k in list) {
+      Player.install(list[k].name, list[k].method)
+    }
+  }
+
+  static use (name, descriptor) {
+    if (!Player.plugins) {
+      Player.plugins = {}
+    }
     Player.plugins[name] = descriptor
+  }
+
+  static useAll (list) {
+    for (let k in list) {
+      Player.use(list[k].name, list[k].method)
+    }
+  }
+
+  static controlsRun (controlLst, context) {
+    controlLst.forEach(function(control) {
+      control.method.call(context)
+    })
   }
 }
 
 Player.util = util
 Player.sniffer = sniffer
 Player.Errors = Errors
+Player.XgplayerTimeRange = XgplayerTimeRange
 
 export default Player

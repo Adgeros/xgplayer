@@ -1,3 +1,5 @@
+import XgplayerTimeRange from './xgplayerTimeRange'
+
 let util = {}
 
 util.createDom = function (el = 'div', tpl = '', attrs = {}, cname = '') {
@@ -19,14 +21,24 @@ util.createDom = function (el = 'div', tpl = '', attrs = {}, cname = '') {
 }
 
 util.hasClass = function (el, className) {
+  if (!el) {
+    return false;
+  }
+
   if (el.classList) {
     return Array.prototype.some.call(el.classList, item => item === className)
-  } else {
+  } else if (el.className) {
     return !!el.className.match(new RegExp('(\\s|^)' + className + '(\\s|$)'))
+  } else {
+    return false;
   }
 }
 
 util.addClass = function (el, className) {
+  if (!el) {
+    return;
+  }
+
   if (el.classList) {
     className.replace(/(^\s+|\s+$)/g, '').split(/\s+/g).forEach(item => {
       item && el.classList.add(item)
@@ -37,6 +49,10 @@ util.addClass = function (el, className) {
 }
 
 util.removeClass = function (el, className) {
+  if (!el) {
+    return;
+  }
+
   if (el.classList) {
     className.split(/\s+/g).forEach(item => {
       el.classList.remove(item)
@@ -50,6 +66,10 @@ util.removeClass = function (el, className) {
 }
 
 util.toggleClass = function (el, className) {
+  if (!el) {
+    return;
+  }
+
   className.split(/\s+/g).forEach(item => {
     if (util.hasClass(el, item)) {
       util.removeClass(el, item)
@@ -66,7 +86,7 @@ util.findDom = function (el = document, sel) {
   try {
     dom = el.querySelector(sel)
   } catch (e) {
-    if (sel.startsWith('#')) {
+    if (sel.indexOf('#') === 0) {
       dom = el.getElementById(sel.slice(1))
     }
   }
@@ -172,8 +192,8 @@ util.createImgBtn = function (name, imgUrl, width, height) {
     let w, h, unit
     ['px', 'rem', 'em', 'pt', 'dp', 'vw', 'vh', 'vm', '%'].every((item) => {
       if (width.indexOf(item) > -1 && height.indexOf(item) > -1) {
-        w = parseFloat(width.slice(0, width.indexOf(item)).trim())
-        h = parseFloat(height.slice(0, height.indexOf(item)).trim())
+        w = Number(width.slice(0, width.indexOf(item)).trim())
+        h = Number(height.slice(0, height.indexOf(item)).trim())
         unit = item
         return false
       } else {
@@ -192,23 +212,121 @@ util.createImgBtn = function (name, imgUrl, width, height) {
   return btn
 }
 
-util.Hex2RGBA = function (hex, alpha) {
-  let rgb = [] // 定义rgb数组
-  if (/^\#[0-9A-F]{3}$/i.test(hex)) {
-    let sixHex = '#'
-    hex.replace(/[0-9A-F]/ig, function (kw) {
-      sixHex += kw + kw
-    })
-    hex = sixHex
+util.isWeiXin = function () {
+    let ua = window.navigator.userAgent.toLowerCase()
+    return ua.indexOf('micromessenger') > -1
+}
+
+util.isUc = function () {
+  let ua = window.navigator.userAgent.toLowerCase()
+  return ua.indexOf('ucbrowser') > -1
+}
+
+util.computeWatchDur = function (played = []) {
+  let arr = []
+  for (let i = 0; i < played.length; i++) {
+    if(!played[i].end || played[i].begin < 0 || played[i].end < 0 || played[i].end < played[i].begin) {
+      continue
+    }
+    if(arr.length < 1) {
+      arr.push({begin: played[i].begin, end: played[i].end})
+    } else {
+      for (let j = 0; j < arr.length; j++) {
+        let begin = played[i].begin
+        let end = played[i].end
+        if(end < arr[j].begin) {
+          arr.splice(j, 0, {begin, end})
+          break
+        } else if(begin > arr[j].end) {
+          if(j > arr.length - 2) {
+            arr.push({begin, end})
+            break
+          }
+        } else {
+          let b = arr[j].begin
+          let e = arr[j].end
+          arr[j].begin = Math.min(begin, b)
+          arr[j].end = Math.max(end, e)
+          break
+        }
+      }
+    }
   }
-  if (/^#[0-9A-F]{6}$/i.test(hex)) {
-    hex.replace(/[0-9A-F]{2}/ig, function (kw) {
-      rgb.push(parseInt(kw, 16))
-    })
-    return `rgba(${rgb.join(',')}, ${alpha})`
+  let watch_dur = 0
+  for (let i = 0; i < arr.length; i++) {
+    watch_dur += arr[i].end - arr[i].begin
+  }
+  return watch_dur
+}
+
+util.offInDestroy = (object, event, fn, offEvent) => {
+  function onDestroy () {
+    object.off(event, fn)
+    object.off(offEvent, onDestroy)
+  }
+  object.once(offEvent, onDestroy)
+}
+
+util.on = (object, event, fn, offEvent) => {
+  if (offEvent) {
+    object.on(event, fn)
+    util.offInDestroy(object, event, fn, offEvent)
   } else {
-    return 'rgba(255, 255, 255, 0.1)'
+    let _fn = data => {
+      fn(data)
+      object.off(event, _fn)
+    }
+    object.on(event, _fn)
   }
+}
+
+util.once = (object, event, fn, offEvent) => {
+  if (offEvent) {
+    object.once(event, fn)
+    util.offInDestroy(object, event, fn, offEvent)
+  } else {
+    let _fn = data => {
+      fn(data)
+      object.off(event, _fn)
+    }
+    object.once(event, _fn)
+  }
+}
+
+util.getBuffered2 = (vbuffered, maxHoleDuration = 0.5) => { //ref: hls.js
+  let buffered = []
+  for (let i = 0; i < vbuffered.length; i++) {
+    buffered.push({ start: vbuffered.start(i) < 0.5 ? 0 : vbuffered.start(i), end: vbuffered.end(i) });
+  }
+  buffered.sort(function (a, b) {
+    let diff = a.start - b.start;
+    if (diff) {
+      return diff;
+    } else {
+      return b.end - a.end;
+    }
+  });
+  let buffered_2 = []
+  if (maxHoleDuration) {
+    for (let i = 0; i < buffered.length; i++) {
+      let buf2len = buffered_2.length
+      if (buf2len) {
+        let buf2end = buffered_2[buf2len - 1].end
+        if ((buffered[i].start - buf2end) < maxHoleDuration) {
+          if (buffered[i].end > buf2end) {
+            buffered_2[buf2len - 1].end = buffered[i].end
+          }
+        } else {
+          buffered_2.push(buffered[i])
+        }
+      } else {
+        buffered_2.push(buffered[i])
+      }
+    }
+  } else {
+    buffered_2 = buffered
+  }
+  return new XgplayerTimeRange(buffered_2)
 }
 
 export default util

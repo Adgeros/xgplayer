@@ -30,7 +30,9 @@ let mp4player = function () {
     mainURL = url
   } else if (util.typeOf(url) === 'Array' && url.length) {
     mainURL = url[0].src
-    backupURL = url[1].src
+    if(url.length > 1) {
+      backupURL = url[1].src
+    }
   }
   player.config._mainURL = mainURL
   player.config._backupURL = backupURL
@@ -59,17 +61,14 @@ let mp4player = function () {
     }, 50)
   }
   let init = (url) => {
-    let mp4 = new MP4(url)
+    let mp4 = new MP4(url, player.config)
     let mse
     return new Promise((resolve, reject) => {
       mp4.once('moovReady', () => {
-        mse = new MSE()
+        mse = new MSE(player.config.videoOnly ? 'video/mp4; codecs="avc1.64001E"' : 'video/mp4; codecs="avc1.64001E, mp4a.40.5"')
         mse.on('sourceopen', function () {
           mse.appendBuffer(mp4.packMeta())
           mse.once('updateend', loadData.bind(player))
-        })
-        mse.on('error', function (e) {
-          reject(e)
         })
         resolve([mp4, mse])
       })
@@ -109,7 +108,8 @@ let mp4player = function () {
       player.switchURL = null
       player._replay = null
 
-      player.off('timeupdate', timeupdateFunc)
+      // player.off('timeupdate', timeupdateFunc)
+      clearInterval(player.mp4ProgressTimer)
       player.off('seeking', seekingFunc)
       player.off('pause', pauseFunc)
       player.off('playing', playingFunc)
@@ -132,6 +132,9 @@ let mp4player = function () {
 
     player.start = function (url = mainURL) {
       init(url).then((result) => {
+        player.once('canplay', () => {
+          player.play()
+        })
         let mp4 = result[0]; let mse = result[1]
         player._start(mse.url)
         player.logParams.pluginSrc = url
@@ -155,7 +158,7 @@ let mp4player = function () {
 
     player.cut = function (start = 0, end) {
       let segment = new Buffer()
-      let mp4 = new MP4(url)
+      let mp4 = new MP4(url, player.config)
       return new Promise((resolve, reject) => {
         mp4.once('moovReady', () => {
           if (!end || end <= start) {
@@ -188,7 +191,7 @@ let mp4player = function () {
     }
 
     player.switchURL = (url) => {
-      let mp5 = new MP4(url)
+      let mp5 = new MP4(url, player.config)
       let mp4 = player.mp4
       mp5.on('moovReady', () => {
         let timeRange = mp4.timeRage; let curTime = player.currentTime
@@ -216,9 +219,7 @@ let mp4player = function () {
         player.mse.appendBuffer(mp5.packMeta())
 
         player.logParams.pt = new Date().getTime()
-        // console.log('pt: ' + player.logParams.pt)
         player.logParams.vt = new Date().getTime()
-        // console.log('vt: ' + player.logParams.vt)
         player.logParams.vd = player.video.duration
         player.logParams.pluginSrc = url
       })
@@ -228,7 +229,7 @@ let mp4player = function () {
     }
 
     player.playNext = (url) => {
-      let mp5 = new MP4(url)
+      let mp5 = new MP4(url, player.config)
       let mp4 = player.mp4
       mp5.on('moovReady', () => {
         let range = [0, 0]
@@ -297,7 +298,8 @@ let mp4player = function () {
       }
     }
 
-    player.on('timeupdate', timeupdateFunc)
+    // player.on('timeupdate', timeupdateFunc)
+    player.mp4ProgressTimer = setInterval(timeupdateFunc, player.config.mp4ProgressTimer || 300)
 
     let seekingFunc = function () {
       let buffered = player.buffered; let hasBuffered = false; let curTime = player.currentTime
@@ -357,7 +359,8 @@ let mp4player = function () {
 
     let endedFunc = function () {
       player.off('waiting', waitingFunc)
-      player.off('timeupdate', timeupdateFunc)
+      // player.off('timeupdate', timeupdateFunc)
+      clearInterval(player.mp4ProgressTimer)
     }
     player.on('ended', endedFunc)
 
@@ -381,7 +384,8 @@ let mp4player = function () {
         player.play()
         player.once('canplay', () => {
           player.on('waiting', waitingFunc)
-          player.on('timeupdate', timeupdateFunc)
+          // player.on('timeupdate', timeupdateFunc)
+          player.mp4ProgressTimer = setInterval(timeupdateFunc, player.config.mp4ProgressTimer || 300)
         })
       }, err => {
         errorHandle(player, err)
